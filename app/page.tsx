@@ -34,11 +34,58 @@ function shuffle<T>(array: T[]): T[] {
   return arr;
 }
 
+// 🔹 1., 2), 3. kimi nömrələnmiş sualları "bir nömrədən növbəti nömrəyə qədər" bölən helper
+function splitNumberedQuestions(text: string): string[] {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const questions: string[] = [];
+  let current: string[] = [];
+  let hasNumberPattern = false;
+
+  const isNumbered = (line: string) => /^\s*\d+[\.\)]\s+/.test(line); // 1. , 2) və s.
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      if (current.length) current.push(""); // boş sətiri də sualın içində saxla
+      continue;
+    }
+
+    if (isNumbered(line)) {
+      hasNumberPattern = true;
+      // yeni sual başlayır
+      if (current.length) {
+        questions.push(current.join(" ").replace(/\s+/g, " ").trim());
+        current = [];
+      }
+      current.push(line);
+    } else {
+      // nömrə ilə başlamır → əvvəlki sualın davamı
+      if (current.length) {
+        current.push(line);
+      } else {
+        // heç sual açılmayıbsa, yenisini başlat
+        current.push(line);
+      }
+    }
+  }
+
+  if (current.length) {
+    questions.push(current.join(" ").replace(/\s+/g, " ").trim());
+  }
+
+  // ümumiyyətlə nömrələnmə tapılmadısa → fallback: hər sətir = 1 sual
+  if (!hasNumberPattern) {
+    return lines.map((l) => l.trim()).filter(Boolean);
+  }
+
+  return questions.filter(Boolean);
+}
+
 export default function HomePage() {
   const [university, setUniversity] = useState("Bakı Biznes Universiteti");
   const [subject, setSubject] = useState("");
   const [ticketCount, setTicketCount] = useState<number>(20);
-  const [strictNoRepeat, setStrictNoRepeat] = useState(false); // true olsa: sual təkrarı əsla yoxdur, amma sual azdırsa error verəcək
+  const [strictNoRepeat, setStrictNoRepeat] = useState(false); // true olsa: sual təkrarı əsla yoxdur
 
   const [blocks, setBlocks] = useState<RawBlock[]>([
     { name: "Blok 1", text: "" },
@@ -69,10 +116,9 @@ export default function HomePage() {
   const parseBlocks = (): Block[] => {
     return blocks.map((b, i) => ({
       name: (b.name || `Blok ${i + 1}`).trim(),
-      questions: b.text
-        .split("\n")
-        .map((q) => q.trim())
-        .filter(Boolean),
+      // ƏVVƏL: hər sətir 1 sual idi
+      // İNDİ: 1., 2) kimi nömrələnibsə → bir nömrədən növbəti nömrəyə qədər = 1 sual
+      questions: splitNumberedQuestions(b.text),
     }));
   };
 
@@ -118,10 +164,8 @@ export default function HomePage() {
         let qText: string;
 
         if (strictNoRepeat) {
-          // Bu rejimdə artıq yoxlamışıq ki, sual sayı ≥ ticketCount
           qText = b.questions[i];
         } else {
-          // Burda isə sual azdırsa, i % length ilə dövr edən sistem: təkrar ola bilər, amma minimum səviyyədə
           const idx = i % b.questions.length;
           qText = b.questions[idx];
         }
@@ -172,7 +216,6 @@ export default function HomePage() {
               });
             });
 
-            // Hər biletdən sonra 2 boş sətir
             return [
               ...header,
               ...body,
@@ -202,16 +245,12 @@ export default function HomePage() {
       </h1>
 
       <div style={{ marginBottom: "16px" }}>
-      <Link
-        href="/fayl-oxuma"
-        style={{
-          fontSize: "14px",
-          textDecoration: "underline",
-          color: "#2563eb",
-        }}
-      >
-        Fayl oxuma (DOCX test səhifəsi)
-      </Link>
+        <Link
+          href="/fayl-oxuma"
+              className="mt-4 inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
+        >
+          Fayl oxuma (DOCX test səhifəsi)
+        </Link>
       </div>
 
       {/* Ümumi məlumatlar */}
@@ -234,7 +273,13 @@ export default function HomePage() {
           }}
         >
           <div>
-            <label style={{ fontSize: "14px", display: "block", marginBottom: "4px" }}>
+            <label
+              style={{
+                fontSize: "14px",
+                display: "block",
+                marginBottom: "4px",
+              }}
+            >
               Universitet
             </label>
             <input
@@ -251,7 +296,13 @@ export default function HomePage() {
           </div>
 
           <div>
-            <label style={{ fontSize: "14px", display: "block", marginBottom: "4px" }}>
+            <label
+              style={{
+                fontSize: "14px",
+                display: "block",
+                marginBottom: "4px",
+              }}
+            >
               Fənn
             </label>
             <input
@@ -269,7 +320,13 @@ export default function HomePage() {
           </div>
 
           <div>
-            <label style={{ fontSize: "14px", display: "block", marginBottom: "4px" }}>
+            <label
+              style={{
+                fontSize: "14px",
+                display: "block",
+                marginBottom: "4px",
+              }}
+            >
               Bilet sayı
             </label>
             <input
@@ -286,7 +343,14 @@ export default function HomePage() {
             />
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "20px" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              marginTop: "20px",
+            }}
+          >
             <input
               id="strict-no-repeat"
               type="checkbox"
@@ -294,7 +358,8 @@ export default function HomePage() {
               onChange={(e) => setStrictNoRepeat(e.target.checked)}
             />
             <label htmlFor="strict-no-repeat" style={{ fontSize: "14px" }}>
-              Sual təkrarı QƏTİ olmasın ( hər blokda ən azı bilet sayı qədər sual olmalıdır )
+              Sual təkrarı QƏTİ olmasın (hər blokda ən azı bilet sayı qədər sual
+              olmalıdır)
             </label>
           </div>
         </div>
@@ -312,11 +377,15 @@ export default function HomePage() {
         <h2 style={{ fontSize: "18px", marginBottom: "12px" }}>Bloklar və suallar</h2>
 
         <p style={{ fontSize: "13px", marginBottom: "8px", color: "#555" }}>
-          Hər blok üçün: hər sətir 1 sual. Bütün fənlər üçün standart 5 blokdur. Sistem hər
-          biletdə hər blokdan 1 sual seçəcək.
+          Sən sualları istəsən birbaşa hər sətirə 1 sual kimi yaza bilərsən. Əgər
+          sualları <strong>1., 2), 3.</strong> kimi nömrələsən, sistem bir
+          nömrədən növbəti nömrəyə qədər olan hissəni <strong>1 sual</strong> kimi
+          qəbul edəcək (multi-line suallar üçün ideal).
         </p>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+        <div
+          style={{ display: "flex", flexDirection: "column", gap: "12px" }}
+        >
           {blocks.map((block, index) => (
             <div
               key={index}
@@ -326,11 +395,19 @@ export default function HomePage() {
                 padding: "12px",
               }}
             >
-              <div style={{ display: "flex", gap: "8px", marginBottom: "8px" }}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: "8px",
+                  marginBottom: "8px",
+                }}
+              >
                 <input
                   type="text"
                   value={block.name}
-                  onChange={(e) => handleBlockNameChange(index, e.target.value)}
+                  onChange={(e) =>
+                    handleBlockNameChange(index, e.target.value)
+                  }
                   style={{
                     flex: 1,
                     padding: "6px 8px",
@@ -339,13 +416,17 @@ export default function HomePage() {
                     fontSize: "14px",
                   }}
                 />
-                <span style={{ fontSize: "13px", color: "#777" }}>Blok {index + 1}</span>
+                <span style={{ fontSize: "13px", color: "#777" }}>
+                  Blok {index + 1}
+                </span>
               </div>
 
               <textarea
                 value={block.text}
-                onChange={(e) => handleBlockTextChange(index, e.target.value)}
-                placeholder={`Buraya ${block.name} üçün sualları yazın. Hər sətir 1 sual olsun.`}
+                onChange={(e) =>
+                  handleBlockTextChange(index, e.target.value)
+                }
+                placeholder={`Buraya ${block.name} üçün sualları yazın.\n\nVariant 1: Hər sətir 1 sual.\nVariant 2: 1., 2), 3. ilə nömrələyin, sistem nömrədən nömrəyə qədər olan hissəni 1 sual kimi götürəcək.`}
                 rows={6}
                 style={{
                   width: "100%",
@@ -355,6 +436,7 @@ export default function HomePage() {
                   fontSize: "13px",
                   resize: "vertical",
                   fontFamily: "inherit",
+                  whiteSpace: "pre-wrap",
                 }}
               />
             </div>
@@ -363,7 +445,13 @@ export default function HomePage() {
       </section>
 
       {/* Action düymələri */}
-      <section style={{ marginBottom: "16px", display: "flex", gap: "12px" }}>
+      <section
+        style={{
+          marginBottom: "16px",
+          display: "flex",
+          gap: "12px",
+        }}
+      >
         <button
           onClick={generateTickets}
           style={{
@@ -404,16 +492,20 @@ export default function HomePage() {
           marginBottom: "32px",
         }}
       >
-        <h2 style={{ fontSize: "18px", marginBottom: "12px" }}>Bilet ön-baxışı</h2>
+        <h2 style={{ fontSize: "18px", marginBottom: "12px" }}>
+          Bilet ön-baxışı
+        </h2>
 
         {!tickets.length && (
           <p style={{ fontSize: "14px", color: "#666" }}>
-            Hələ bilet generasiya olunmayıb. Yuxarıda sualları daxil edib "Biletləri generasiya et"
-            düyməsinə kliklə.
+            Hələ bilet generasiya olunmayıb. Yuxarıda sualları daxil edib
+            &quot;Biletləri generasiya et&quot; düyməsinə kliklə.
           </p>
         )}
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+        <div
+          style={{ display: "flex", flexDirection: "column", gap: "16px" }}
+        >
           {tickets.map((ticket) => (
             <div
               key={ticket.number}
@@ -423,13 +515,32 @@ export default function HomePage() {
                 padding: "12px",
               }}
             >
-              <div style={{ fontSize: "13px", color: "#555", marginBottom: "4px" }}>
+              <div
+                style={{
+                  fontSize: "13px",
+                  color: "#555",
+                  marginBottom: "4px",
+                }}
+              >
                 {university}
               </div>
-              <div style={{ fontSize: "13px", color: "#555", marginBottom: "8px" }}>
+              <div
+                style={{
+                  fontSize: "13px",
+                  color: "#555",
+                  marginBottom: "8px",
+                }}
+              >
                 Fənn: {subject || "________"}
               </div>
-              <div style={{ fontWeight: 600, marginBottom: "8px" }}>Bilet № {ticket.number}</div>
+              <div
+                style={{
+                  fontWeight: 600,
+                  marginBottom: "8px",
+                }}
+              >
+                Bilet № {ticket.number}
+              </div>
 
               <ol style={{ paddingLeft: "20px", fontSize: "14px" }}>
                 {ticket.questions.map((q, idx) => (

@@ -9,6 +9,7 @@ import {
   ImageRun,
 } from "docx";
 import { saveAs } from "file-saver";
+import Link from "next/link";
 
 // =========================
 //         TYPE-LƏR
@@ -47,6 +48,7 @@ type ParsedResult = {
 //    HELPER FUNCTIONS
 // =========================
 
+// Array shuffle
 function shuffle<T>(array: T[]): T[] {
   const arr = [...array];
   for (let i = arr.length - 1; i > 0; i--) {
@@ -77,87 +79,158 @@ function dataUrlToImage(dataUrl: string): QuestionImage | null {
   return { contentType, data: bytes };
 }
 
-// HTML → bloklara böl
+// 🔹 1., 2), 3. kimi nömrələnmiş sualları "bir nömrədən növbəti nömrəyə qədər" bölən helper
+function splitNumberedQuestions(text: string): string[] {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const questions: string[] = [];
+  let current: string[] = [];
+  let hasNumberPattern = false;
+
+  const isNumbered = (line: string) => /^\s*\d+[\.\)]\s+/.test(line); // 1. , 2) və s.
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      if (current.length) current.push(""); // boş sətiri də saxlayırıq
+      continue;
+    }
+
+    if (isNumbered(line)) {
+      hasNumberPattern = true;
+      // yeni sual başlayır
+      if (current.length) {
+        questions.push(current.join(" ").replace(/\s+/g, " ").trim());
+        current = [];
+      }
+      current.push(line);
+    } else {
+      // nömrə ilə başlamırsa → əvvəlki sualın davamı
+      if (current.length) {
+        current.push(line);
+      } else {
+        // heç sual açılmayıbsa, yenisini başlat
+        current.push(line);
+      }
+    }
+  }
+
+  if (current.length) {
+    questions.push(current.join(" ").replace(/\s+/g, " ").trim());
+  }
+
+  // ümumiyyətlə nömrələnmə tapılmadısa → fallback: hər sətir = 1 sual
+  if (!hasNumberPattern) {
+    return lines.map((l) => l.trim()).filter(Boolean);
+  }
+
+  return questions.filter(Boolean);
+}
+
+// HTML → bloklara böl (I BLOK, II BLOK...) və içindəki sualları çıxar
 function parseBlocksFromHtml(html: string): Block[] {
-   const parser = new DOMParser();
-   const doc = parser.parseFromString(html, "text/html");
- 
-   const blocks: Block[] = [];
-   let currentBlock: Block | null = null;
- 
-   const blockRegex = /^(I|II|III|IV|V)\s*BLOK/i;
- 
-   // Body-nin birbaşa child elementlərini gəzək (p, ol, table və s.)
-   const elements = Array.from(doc.body.children);
- 
-   for (const el of elements) {
-     const text = (el.textContent || "").trim();
- 
-     // 1) BLOK başlıqları (I BLOK, II BLOK...)
-     const isBlockHeader = text && blockRegex.test(text);
-     if (isBlockHeader) {
-       currentBlock = {
-         name: text,
-         questions: [],
-       };
-       blocks.push(currentBlock);
-       continue;
-     }
- 
-     // Hələ blok başlamayıbsa, bu elementi atlayırıq
-     if (!currentBlock) continue;
- 
-     // 2) Əgər element OL/UL-dursa → hər <li> ayrıca sual olsun
-     if (el.tagName === "OL" || el.tagName === "UL") {
-       const liElements = Array.from(el.children).filter(
-         (child) => (child as HTMLElement).tagName === "LI"
-       ) as HTMLElement[];
- 
-       liElements.forEach((li) => {
-         const liText = (li.textContent || "").trim();
-         const imgEls = Array.from(li.querySelectorAll("img"));
- 
-         if (!liText && imgEls.length === 0) return; // boş li
- 
-         const images: QuestionImage[] = [];
-         imgEls.forEach((img) => {
-           const src = img.getAttribute("src");
-           if (!src) return;
-           const qImg = dataUrlToImage(src);
-           if (qImg) images.push(qImg);
-         });
- 
-         currentBlock!.questions.push({
-           text: liText,
-           images,
-         });
-       });
- 
-       // bu elementi artıq işlədik, davam
-       continue;
-     }
- 
-     // 3) Digər elementlər (p, div, table və s.) → əvvəlki kimi 1 sual
-     const imgEls = Array.from(el.querySelectorAll("img"));
-     if (!text && imgEls.length === 0) continue;
- 
-     const images: QuestionImage[] = [];
-     imgEls.forEach((img) => {
-       const src = img.getAttribute("src");
-       if (!src) return;
-       const qImg = dataUrlToImage(src);
-       if (qImg) images.push(qImg);
-     });
- 
-     currentBlock.questions.push({
-       text,
-       images,
-     });
-   }
- 
-   // sualı olmayan blokları atırıq
-   return blocks.filter((b) => b.questions.length > 0);
- }
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, "text/html");
+
+  const blocks: Block[] = [];
+  let currentBlock: Block | null = null;
+
+  const blockRegex = /^(I|II|III|IV|V)\s*BLOK/i;
+
+  // Body-nin birbaşa child elementlərini gəzək (p, ol, table və s.)
+  const elements = Array.from(doc.body.children);
+
+  for (const el of elements) {
+    const text = (el.textContent || "").trim();
+
+    // 1) BLOK başlıqları (I BLOK, II BLOK...)
+    const isBlockHeader = text && blockRegex.test(text);
+    if (isBlockHeader) {
+      currentBlock = {
+        name: text,
+        questions: [],
+      };
+      blocks.push(currentBlock);
+      continue;
+    }
+
+    // Hələ blok başlamayıbsa, bu elementi atlayırıq
+    if (!currentBlock) continue;
+
+    // 2) Əgər element OL/UL-dursa → hər <li> ayrıca sual, içində nömrələnmə varsa onu da böl
+    if (el.tagName === "OL" || el.tagName === "UL") {
+      const liElements = Array.from(el.children).filter(
+        (child) => (child as HTMLElement).tagName === "LI"
+      ) as HTMLElement[];
+
+      liElements.forEach((li) => {
+        const liText = (li.textContent || "").trim();
+        const imgEls = Array.from(li.querySelectorAll("img"));
+
+        if (!liText && imgEls.length === 0) return; // boş li
+
+        const images: QuestionImage[] = [];
+        imgEls.forEach((img) => {
+          const src = img.getAttribute("src");
+          if (!src) return;
+          const qImg = dataUrlToImage(src);
+          if (qImg) images.push(qImg);
+        });
+
+        if (images.length > 0) {
+          // şəkilli sualdır → 1 sual kimi saxlayırıq
+          currentBlock!.questions.push({
+            text: liText,
+            images,
+          });
+        } else {
+          // yalnız mətn → nömrələnmiş suallara böl
+          const parts = splitNumberedQuestions(liText);
+          parts.forEach((qText) => {
+            currentBlock!.questions.push({
+              text: qText,
+              images: [],
+            });
+          });
+        }
+      });
+
+      continue;
+    }
+
+    // 3) Digər elementlər (p, div, table və s.)
+    const imgEls = Array.from(el.querySelectorAll("img"));
+    if (!text && imgEls.length === 0) continue;
+
+    const images: QuestionImage[] = [];
+    imgEls.forEach((img) => {
+      const src = img.getAttribute("src");
+      if (!src) return;
+      const qImg = dataUrlToImage(src);
+      if (qImg) images.push(qImg);
+    });
+
+    if (images.length > 0) {
+      // şəkil varsa → bütöv element 1 sual
+      currentBlock.questions.push({
+        text,
+        images,
+      });
+    } else {
+      // yalnız mətn → nömrələnmiş multi-line suallara böl
+      const parts = splitNumberedQuestions(text);
+      parts.forEach((qText) => {
+        currentBlock!.questions.push({
+          text: qText,
+          images: [],
+        });
+      });
+    }
+  }
+
+  // sualı olmayan blokları sil
+  return blocks.filter((b) => b.questions.length > 0);
+}
+
 // =========================
 //      MAIN COMPONENT
 // =========================
@@ -380,15 +453,25 @@ export default function FaylOxumaPage() {
             + şəkil) avtomatik ayırsın → Biletləri generasiya edib DOCX olaraq
             yüklə.
           </p>
+          <Link
+          href="/"
+              className="mt-4 inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
+        >
+          Sualları Blok Blok əlavə et
+        </Link>
         </div>
       </header>
 
       {/* Fayl seçimi kartı */}
       <section className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="mb-2 text-sm font-semibold text-slate-800">1. DOCX faylını yüklə</h2>
+        <h2 className="mb-2 text-sm font-semibold text-slate-800">
+          1. DOCX faylını yüklə
+        </h2>
         <p className="mb-3 text-xs text-slate-500">
           Faylda blok başlıqları <strong>I BLOK, II BLOK, ...</strong> formasında
           olmalıdır. Hər blokun altında praktiki suallar (mətn + şəkil) ola bilər.
+          Suallar nömrələnibsə (1., 2), 3. və s.), sistem bir nömrədən
+          növbəti nömrəyə qədər olan hissəni 1 sual kimi qəbul edəcək.
         </p>
 
         <input
