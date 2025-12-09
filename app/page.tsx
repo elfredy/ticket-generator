@@ -1,23 +1,38 @@
 "use client";
 
 import { useState } from "react";
+import {
+  Document,
+  Packer,
+  Paragraph,
+  HeadingLevel,
+  ImageRun,
+} from "docx";
 import { saveAs } from "file-saver";
-import { Document, Packer, Paragraph, HeadingLevel } from "docx";
 import Link from "next/link";
 
-type RawBlock = {
-  name: string;
+// =========================
+//         TYPE-LƏR
+// =========================
+
+type QuestionImage = {
+  contentType: string; // image/png, image/jpeg...
+  data: Uint8Array;
+};
+
+type Question = {
   text: string;
+  images: QuestionImage[];
 };
 
 type Block = {
   name: string;
-  questions: string[];
+  questions: Question[];
 };
 
 type TicketQuestion = {
   block: string;
-  text: string;
+  question: Question;
 };
 
 type Ticket = {
@@ -25,6 +40,15 @@ type Ticket = {
   questions: TicketQuestion[];
 };
 
+type ParsedResult = {
+  html: string;
+};
+
+// =========================
+//    HELPER FUNCTIONS
+// =========================
+
+// Array shuffle
 function shuffle<T>(array: T[]): T[] {
   const arr = [...array];
   for (let i = arr.length - 1; i > 0; i--) {
@@ -32,6 +56,27 @@ function shuffle<T>(array: T[]): T[] {
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
   return arr;
+}
+
+// data:image/...;base64,... → Uint8Array + MIME
+function dataUrlToImage(dataUrl: string): QuestionImage | null {
+  if (!dataUrl.startsWith("data:")) return null;
+
+  const [meta, base64] = dataUrl.split(",");
+  if (!base64) return null;
+
+  const match = meta.match(/^data:(.*);base64$/);
+  const contentType = match?.[1] ?? "image/png";
+
+  const binary = atob(base64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+
+  return { contentType, data: bytes };
 }
 
 // 🔹 1., 2), 3. kimi nömrələnmiş sualları "bir nömrədən növbəti nömrəyə qədər" bölən helper
@@ -81,76 +126,239 @@ function splitNumberedQuestions(text: string): string[] {
   return questions.filter(Boolean);
 }
 
-export default function HomePage() {
+// HTML → bloklara böl (I BLOK, II BLOK...) və içindəki sualları çıxar
+function parseBlocksFromHtml(html: string): Block[] {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, "text/html");
+
+  const blocks: Block[] = [];
+  let currentBlock: Block | null = null;
+
+  const blockRegex = /^(I|II|III|IV|V)\s*BLOK/i;
+
+  // Body-nin birbaşa child elementlərini gəzək (p, ol, table və s.)
+  const elements = Array.from(doc.body.children);
+
+  for (const el of elements) {
+    const text = (el.textContent || "").trim();
+
+    // 1) BLOK başlıqları (I BLOK, II BLOK...)
+    const isBlockHeader = text && blockRegex.test(text);
+    if (isBlockHeader) {
+      currentBlock = {
+        name: text,
+        questions: [],
+      };
+      blocks.push(currentBlock);
+      continue;
+    }
+
+    // Hələ blok başlamayıbsa, bu elementi atlayırıq
+    if (!currentBlock) continue;
+
+    // 2) Əgər element OL/UL-dursa → hər <li> ayrıca sual, içində nömrələnmə varsa onu da böl
+    if (el.tagName === "OL" || el.tagName === "UL") {
+      const liElements = Array.from(el.children).filter(
+        (child) => (child as HTMLElement).tagName === "LI"
+      ) as HTMLElement[];
+
+      liElements.forEach((li) => {
+        const liText = (li.textContent || "").trim();
+        const imgEls = Array.from(li.querySelectorAll("img"));
+
+        const images: QuestionImage[] = [];
+        imgEls.forEach((img) => {
+          const src = img.getAttribute("src");
+          if (!src) return;
+          const qImg = dataUrlToImage(src);
+          if (qImg) images.push(qImg);
+        });
+
+        if (!liText && images.length === 0) return; // boş li
+
+        if (images.length > 0) {
+          // li içində həm mətn, həm şəkil varsa → birbaşa bir sual kimi
+          currentBlock!.questions.push({
+            text: liText,
+            images,
+          });
+        } else {
+          // yalnız mətn → nömrələnmiş suallara böl
+          const parts = splitNumberedQuestions(liText);
+          parts.forEach((qText) => {
+            currentBlock!.questions.push({
+              text: qText,
+              images: [],
+            });
+          });
+        }
+      });
+
+      continue;
+    }
+
+    // 3) Digər elementlər (p, div, table və s.)
+    const imgEls = Array.from(el.querySelectorAll("img"));
+    const hasText = !!text;
+    const images: QuestionImage[] = [];
+    imgEls.forEach((img) => {
+      const src = img.getAttribute("src");
+      if (!src) return;
+      const qImg = dataUrlToImage(src);
+      if (qImg) images.push(qImg);
+    });
+    const hasImages = images.length > 0;
+
+    // 🔸 Əgər yalnız şəkil var (mətn yoxdur) → son sualın üzərinə şəkli əlavə edirik
+    if (!hasText && hasImages) {
+      if (currentBlock.questions.length > 0) {
+        const lastQ =
+          currentBlock.questions[currentBlock.questions.length - 1];
+        lastQ.images = [...lastQ.images, ...images];
+      } else {
+        // heç sual yoxdursa, yenə də ayrıca şəkilli sual kimi saxlayırıq
+        currentBlock.questions.push({
+          text: "",
+          images,
+        });
+      }
+      continue;
+    }
+
+    // 🔸 Əgər həm mətn, həm şəkil var → bütün elementi 1 sual kimi saxlayırıq
+    if (hasText && hasImages) {
+      currentBlock.questions.push({
+        text,
+        images,
+      });
+      continue;
+    }
+
+    // 🔸 Yalnız mətn → nömrələnmiş multi-line suallara böl
+    if (hasText && !hasImages) {
+      const parts = splitNumberedQuestions(text);
+      parts.forEach((qText) => {
+        currentBlock!.questions.push({
+          text: qText,
+          images: [],
+        });
+      });
+    }
+  }
+
+  // sualı olmayan blokları sil
+  return blocks.filter((b) => b.questions.length > 0);
+}
+
+// =========================
+//      MAIN COMPONENT
+// =========================
+
+export default function FaylOxumaPage() {
+  const [parsed, setParsed] = useState<ParsedResult | null>(null);
+  const [blocks, setBlocks] = useState<Block[]>([]);
+  const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [structureWarning, setStructureWarning] = useState<string | null>(null);
+
+  // Form state
   const [university, setUniversity] = useState("Bakı Biznes Universiteti");
   const [subject, setSubject] = useState("");
-  const [ticketCount, setTicketCount] = useState<number>(20);
-  const [strictNoRepeat, setStrictNoRepeat] = useState(false); // true olsa: sual təkrarı əsla yoxdur
+  const [ticketCount, setTicketCount] = useState(20);
+  const [strictNoRepeat, setStrictNoRepeat] = useState(false);
 
-  const [blocks, setBlocks] = useState<RawBlock[]>([
-    { name: "Blok 1", text: "" },
-    { name: "Blok 2", text: "" },
-    { name: "Blok 3", text: "" },
-    { name: "Blok 4", text: "" },
-    { name: "Blok 5", text: "" },
-  ]);
+  // =========================
+  //       DOCX LOAD
+  // =========================
 
-  const [tickets, setTickets] = useState<Ticket[]>([]);
+  const handleFileChange = async (file: File | null) => {
+    if (!file) return;
 
-  const handleBlockNameChange = (index: number, value: string) => {
-    setBlocks((prev) => {
-      const copy = [...prev];
-      copy[index] = { ...copy[index], name: value };
-      return copy;
-    });
+    setParsed(null);
+    setBlocks([]);
+    setTickets([]);
+    setErrorMsg(null);
+    setStructureWarning(null);
+    setIsLoading(true);
+
+    try {
+      const reader = new FileReader();
+
+      reader.onload = async (e) => {
+        try {
+          const arrayBuf = e.target?.result;
+          if (!(arrayBuf instanceof ArrayBuffer)) {
+            setErrorMsg("Fayl oxunmadı.");
+            setIsLoading(false);
+            return;
+          }
+
+          const mammoth = await import("mammoth/mammoth.browser");
+
+          const htmlResult = await mammoth.convertToHtml({
+            arrayBuffer: arrayBuf,
+          });
+
+          const html = htmlResult.value;
+
+          setParsed({ html });
+
+          // ⚠️ Cədvəl və ya düstur yoxlaması
+          const parser = new DOMParser();
+          const dom = parser.parseFromString(html, "text/html");
+          const hasTable = dom.querySelector("table") !== null;
+          const hasMath =
+            dom.querySelector("m\\:oMath, math") !== null; // bəzi Word math struktur halları
+
+          if (hasTable || hasMath) {
+            setStructureWarning(
+              "Bu faylda cədvəl və/və ya riyazi düstur aşkarlanıb. Zəhmət olmasa həmin hissələri Word-də şəkil (image) formasında əlavə edin ki, sistem biletə düzgün sala bilsin."
+            );
+          }
+
+          const parsedBlocks = parseBlocksFromHtml(html);
+          setBlocks(parsedBlocks);
+        } catch (err) {
+          console.error(err);
+          setErrorMsg("DOCX oxunarkən xəta baş verdi.");
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      reader.readAsArrayBuffer(file);
+    } catch (err) {
+      console.error(err);
+      setErrorMsg("Fayl oxuma zamanı xəta.");
+      setIsLoading(false);
+    }
   };
 
-  const handleBlockTextChange = (index: number, value: string) => {
-    setBlocks((prev) => {
-      const copy = [...prev];
-      copy[index] = { ...copy[index], text: value };
-      return copy;
-    });
-  };
+  // =========================
+  //     BİLET GENERATORU
+  // =========================
 
-  const parseBlocks = (): Block[] => {
-    return blocks.map((b, i) => ({
-      name: (b.name || `Blok ${i + 1}`).trim(),
-      // ƏVVƏL: hər sətir 1 sual idi
-      // İNDİ: 1., 2) kimi nömrələnibsə → bir nömrədən növbəti nömrəyə qədər = 1 sual
-      questions: splitNumberedQuestions(b.text),
-    }));
-  };
-
-  const generateTickets = () => {
-    if (!ticketCount || ticketCount <= 0) {
-      alert("Bilet sayını düzgün daxil et.");
+  const generateTicketsFromDoc = () => {
+    if (!blocks.length) {
+      alert("Əvvəlcə DOCX faylı yüklə.");
       return;
     }
 
-    const parsed = parseBlocks();
-
-    // Hər blokda ən azı 1 sual olmalıdır
-    const emptyBlock = parsed.find((b) => b.questions.length === 0);
-    if (emptyBlock) {
-      alert(`${emptyBlock.name} üçün heç bir sual daxil edilməyib.`);
+    if (!ticketCount || ticketCount < 1) {
+      alert("Bilet sayı düzgün deyil.");
       return;
     }
 
-    // Əgər strictNoRepeat → hər blokda sual sayı bilet sayından az ola bilməz
     if (strictNoRepeat) {
-      const badBlock = parsed.find((b) => b.questions.length < ticketCount);
-      if (badBlock) {
-        alert(
-          `${badBlock.name} blokunda kifayət qədər sual yoxdur.\n` +
-            `Strict no-repeat rejimində ${ticketCount} bilet üçün ən azı ${ticketCount} sual lazımdır.`
-        );
+      const bad = blocks.find((b) => b.questions.length < ticketCount);
+      if (bad) {
+        alert(`${bad.name} blokunda kifayət qədər sual yoxdur.`);
         return;
       }
     }
 
-    // Hər blok üçün shuffle edirik ki, təkrar minimum olsun
-    const shuffledByBlock = parsed.map((b) => ({
+    const shuffled = blocks.map((b) => ({
       name: b.name,
       questions: shuffle(b.questions),
     }));
@@ -158,401 +366,340 @@ export default function HomePage() {
     const newTickets: Ticket[] = [];
 
     for (let i = 0; i < ticketCount; i++) {
-      const tQuestions: TicketQuestion[] = [];
+      const tQ: TicketQuestion[] = [];
 
-      shuffledByBlock.forEach((b) => {
-        let qText: string;
+      shuffled.forEach((b) => {
+        const q =
+          strictNoRepeat ? b.questions[i] : b.questions[i % b.questions.length];
 
-        if (strictNoRepeat) {
-          qText = b.questions[i];
-        } else {
-          const idx = i % b.questions.length;
-          qText = b.questions[idx];
-        }
-
-        tQuestions.push({
-          block: b.name,
-          text: qText,
-        });
+        tQ.push({ block: b.name, question: q });
       });
 
       newTickets.push({
         number: i + 1,
-        questions: tQuestions,
+        questions: tQ,
       });
     }
 
     setTickets(newTickets);
   };
 
-  const exportToDocx = async () => {
+  // =========================
+  //        DOCX EXPORT
+  // =========================
+
+  const exportTicketsToDocx = async () => {
     if (!tickets.length) {
-      alert("Əvvəlcə biletləri generasiya et.");
+      alert("Əvvəlcə bilet generasiya et.");
       return;
     }
 
-    const doc = new Document({
-      sections: [
-        {
-          properties: {},
-          children: tickets.flatMap((ticket) => {
-            const header: Paragraph[] = [
-              new Paragraph({
-                text: university || "Universitet",
-                heading: HeadingLevel.HEADING_2,
-              }),
-              new Paragraph({
-                text: `Fənn: ${subject || "________"}`,
-              }),
-              new Paragraph({
-                text: `Bilet № ${ticket.number}`,
-              }),
-              new Paragraph({ text: "" }),
-            ];
+    const sections = [
+      {
+        properties: {},
+        children: tickets.flatMap((ticket) => {
+          const arr: Paragraph[] = [];
 
-            const body: Paragraph[] = ticket.questions.map((q, idx) => {
-              return new Paragraph({
-                text: `${idx + 1}. ${q.text}`,
-              });
+          // Header
+          arr.push(
+            new Paragraph({
+              text: university,
+              heading: HeadingLevel.HEADING_2,
+            })
+          );
+          arr.push(new Paragraph(`Fənn: ${subject || "________"}`));
+          arr.push(new Paragraph(`Bilet № ${ticket.number}`));
+          arr.push(new Paragraph(""));
+
+          // Suallar
+          ticket.questions.forEach((tq, idx) => {
+            const q = tq.question;
+            const prefix = `${idx + 1}. `;
+
+            // Mətn
+            arr.push(
+              new Paragraph({
+                text: prefix + (q.text || ""),
+              })
+            );
+
+            // Şəkillər (əgər varsa – artıq mətnlə birlikdə eyni sual üçündür)
+            q.images.forEach((img) => {
+              let type: "png" | "jpg" | "gif" | "bmp" = "png";
+
+              if (img.contentType.includes("png")) {
+                type = "png";
+              } else if (
+                img.contentType.includes("jpeg") ||
+                img.contentType.includes("jpg")
+              ) {
+                type = "jpg";
+              } else if (img.contentType.includes("gif")) {
+                type = "gif";
+              } else if (img.contentType.includes("bmp")) {
+                type = "bmp";
+              }
+
+              arr.push(
+                new Paragraph({
+                  children: [
+                    new ImageRun({
+                      data: img.data,
+                      type,
+                      transformation: {
+                        width: 420,
+                        height: 260,
+                      },
+                    }),
+                  ],
+                })
+              );
             });
 
-            return [
-              ...header,
-              ...body,
-              new Paragraph({ text: "" }),
-              new Paragraph({ text: "" }),
-            ];
-          }),
-        },
-      ],
-    });
+            arr.push(new Paragraph(""));
+          });
 
+          arr.push(new Paragraph(""));
+          arr.push(new Paragraph(""));
+
+          return arr;
+        }),
+      },
+    ];
+
+    const doc = new Document({ sections });
     const blob = await Packer.toBlob(doc);
-    saveAs(blob, "biletlər.docx");
+    saveAs(blob, "biletler_shekilli.docx");
   };
 
+  // =========================
+  //          RENDER
+  // =========================
+
   return (
-    <main
-      style={{
-        maxWidth: "960px",
-        margin: "0 auto",
-        padding: "24px",
-        fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
-      }}
-    >
-      <h1 style={{ fontSize: "24px", fontWeight: 700, marginBottom: "16px" }}>
-        İmtahan Bilet Generatoru (MVP)
-      </h1>
-
-      <div style={{ marginBottom: "16px" }}>
-        <Link
-          href="/fayl-oxuma"
-              className="mt-4 inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
-        >
-          Fayl oxuma (DOCX test səhifəsi)
-        </Link>
-      </div>
-
-      {/* Ümumi məlumatlar */}
-      <section
-        style={{
-          border: "1px solid #ddd",
-          borderRadius: "8px",
-          padding: "16px",
-          marginBottom: "16px",
-        }}
-      >
-        <h2 style={{ fontSize: "18px", marginBottom: "12px" }}>Ümumi məlumat</h2>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: "12px",
-            marginBottom: "12px",
-          }}
-        >
-          <div>
-            <label
-              style={{
-                fontSize: "14px",
-                display: "block",
-                marginBottom: "4px",
-              }}
-            >
-              Universitet
-            </label>
-            <input
-              type="text"
-              value={university}
-              onChange={(e) => setUniversity(e.target.value)}
-              style={{
-                width: "100%",
-                padding: "8px",
-                borderRadius: "4px",
-                border: "1px solid #ccc",
-              }}
-            />
-          </div>
-
-          <div>
-            <label
-              style={{
-                fontSize: "14px",
-                display: "block",
-                marginBottom: "4px",
-              }}
-            >
-              Fənn
-            </label>
-            <input
-              type="text"
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              placeholder="Məs: İKT, İngilis dili, Biologiya..."
-              style={{
-                width: "100%",
-                padding: "8px",
-                borderRadius: "4px",
-                border: "1px solid #ccc",
-              }}
-            />
-          </div>
-
-          <div>
-            <label
-              style={{
-                fontSize: "14px",
-                display: "block",
-                marginBottom: "4px",
-              }}
-            >
-              Bilet sayı
-            </label>
-            <input
-              type="number"
-              min={1}
-              value={ticketCount}
-              onChange={(e) => setTicketCount(Number(e.target.value))}
-              style={{
-                width: "100%",
-                padding: "8px",
-                borderRadius: "4px",
-                border: "1px solid #ccc",
-              }}
-            />
-          </div>
-
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              marginTop: "20px",
-            }}
-          >
-            <input
-              id="strict-no-repeat"
-              type="checkbox"
-              checked={strictNoRepeat}
-              onChange={(e) => setStrictNoRepeat(e.target.checked)}
-            />
-            <label htmlFor="strict-no-repeat" style={{ fontSize: "14px" }}>
-              Sual təkrarı QƏTİ olmasın (hər blokda ən azı bilet sayı qədər sual
-              olmalıdır)
-            </label>
-          </div>
+    <main className="mx-auto max-w-6xl px-4 py-8">
+      {/* Başlıq */}
+      <header className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">
+            DOCX → Şəkilli Bilet Generatoru
+          </h1>
+          <Link href="/blok" className="text-blue-500 hover:text-blue-600">Nəzəri suallar üçün Blok-Blok əlavə etmək  </Link>
+          <p className="text-sm text-slate-600">
+            DOCX yüklə → Sistem blokları (I BLOK, II BLOK...) və sualları (mətn
+            + şəkil) avtomatik ayırsın → Biletləri generasiya edib DOCX olaraq
+            yüklə.
+          </p>
         </div>
-      </section>
+      </header>
 
-      {/* Blok sualları */}
-      <section
-        style={{
-          border: "1px solid #ddd",
-          borderRadius: "8px",
-          padding: "16px",
-          marginBottom: "16px",
-        }}
-      >
-        <h2 style={{ fontSize: "18px", marginBottom: "12px" }}>Bloklar və suallar</h2>
-
-        <p style={{ fontSize: "13px", marginBottom: "8px", color: "#555" }}>
-          Sən sualları istəsən birbaşa hər sətirə 1 sual kimi yaza bilərsən. Əgər
-          sualları <strong>1., 2), 3.</strong> kimi nömrələsən, sistem bir
-          nömrədən növbəti nömrəyə qədər olan hissəni <strong>1 sual</strong> kimi
-          qəbul edəcək (multi-line suallar üçün ideal).
+      {/* Fayl seçimi kartı */}
+      <section className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <h2 className="mb-2 text-sm font-semibold text-slate-800">
+          1. DOCX faylını yüklə
+        </h2>
+        <p className="mb-3 text-xs text-slate-500">
+          Faylda blok başlıqları <strong>I BLOK, II BLOK, ...</strong> formasında
+          olmalıdır. Hər blokun altında praktiki suallar (mətn + şəkil) ola bilər.
+          Suallar nömrələnibsə (1., 2), 3. və s.), sistem bir nömrədən
+          növbəti nömrəyə qədər olan hissəni 1 sual kimi qəbul edəcək.
         </p>
 
-        <div
-          style={{ display: "flex", flexDirection: "column", gap: "12px" }}
-        >
-          {blocks.map((block, index) => (
-            <div
-              key={index}
-              style={{
-                border: "1px solid #eee",
-                borderRadius: "6px",
-                padding: "12px",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  gap: "8px",
-                  marginBottom: "8px",
-                }}
-              >
-                <input
-                  type="text"
-                  value={block.name}
-                  onChange={(e) =>
-                    handleBlockNameChange(index, e.target.value)
-                  }
-                  style={{
-                    flex: 1,
-                    padding: "6px 8px",
-                    borderRadius: "4px",
-                    border: "1px solid #ccc",
-                    fontSize: "14px",
-                  }}
-                />
-                <span style={{ fontSize: "13px", color: "#777" }}>
-                  Blok {index + 1}
-                </span>
-              </div>
+        <input
+          type="file"
+          accept=".doc,.docx"
+          onChange={(e) => handleFileChange(e.target.files?.[0] || null)}
+          className="text-sm file:mr-3 file:rounded-md file:border-0 file:bg-blue-600 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-blue-700"
+        />
 
-              <textarea
-                value={block.text}
-                onChange={(e) =>
-                  handleBlockTextChange(index, e.target.value)
-                }
-                placeholder={`Buraya ${block.name} üçün sualları yazın.\n\nVariant 1: Hər sətir 1 sual.\nVariant 2: 1., 2), 3. ilə nömrələyin, sistem nömrədən nömrəyə qədər olan hissəni 1 sual kimi götürəcək.`}
-                rows={6}
-                style={{
-                  width: "100%",
-                  padding: "8px",
-                  borderRadius: "4px",
-                  border: "1px solid #ccc",
-                  fontSize: "13px",
-                  resize: "vertical",
-                  fontFamily: "inherit",
-                  whiteSpace: "pre-wrap",
-                }}
-              />
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Action düymələri */}
-      <section
-        style={{
-          marginBottom: "16px",
-          display: "flex",
-          gap: "12px",
-        }}
-      >
-        <button
-          onClick={generateTickets}
-          style={{
-            padding: "10px 16px",
-            borderRadius: "6px",
-            border: "none",
-            backgroundColor: "#2563eb",
-            color: "white",
-            fontWeight: 600,
-            cursor: "pointer",
-          }}
-        >
-          Biletləri generasiya et
-        </button>
-
-        <button
-          onClick={exportToDocx}
-          style={{
-            padding: "10px 16px",
-            borderRadius: "6px",
-            border: "1px solid #2563eb",
-            backgroundColor: "white",
-            color: "#2563eb",
-            fontWeight: 600,
-            cursor: "pointer",
-          }}
-        >
-          DOCX olaraq yüklə
-        </button>
-      </section>
-
-      {/* Preview */}
-      <section
-        style={{
-          border: "1px solid #ddd",
-          borderRadius: "8px",
-          padding: "16px",
-          marginBottom: "32px",
-        }}
-      >
-        <h2 style={{ fontSize: "18px", marginBottom: "12px" }}>
-          Bilet ön-baxışı
-        </h2>
-
-        {!tickets.length && (
-          <p style={{ fontSize: "14px", color: "#666" }}>
-            Hələ bilet generasiya olunmayıb. Yuxarıda sualları daxil edib
-            &quot;Biletləri generasiya et&quot; düyməsinə kliklə.
-          </p>
+        {isLoading && (
+          <p className="mt-2 text-sm text-slate-600">Fayl oxunur...</p>
+        )}
+        {errorMsg && (
+          <p className="mt-2 text-sm text-red-600">{errorMsg}</p>
         )}
 
-        <div
-          style={{ display: "flex", flexDirection: "column", gap: "16px" }}
-        >
-          {tickets.map((ticket) => (
-            <div
-              key={ticket.number}
-              style={{
-                border: "1px solid #eee",
-                borderRadius: "6px",
-                padding: "12px",
-              }}
-            >
+        {structureWarning && (
+          <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            {structureWarning}
+          </div>
+        )}
+      </section>
+
+      {/* HTML preview + blok info + parametrlər */}
+      {parsed && (
+        <section className="mb-6 grid gap-4 lg:grid-cols-[1.2fr,0.8fr]">
+          {/* HTML preview */}
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 shadow-sm">
+            <h2 className="mb-2 text-sm font-semibold text-slate-800">
+              2. DOCX HTML görünüşü (mətn + şəkillər)
+            </h2>
+            <div className="max-h-[420px] overflow-auto rounded-lg border border-slate-200 bg-white p-3 text-sm">
               <div
-                style={{
-                  fontSize: "13px",
-                  color: "#555",
-                  marginBottom: "4px",
-                }}
-              >
-                {university}
-              </div>
-              <div
-                style={{
-                  fontSize: "13px",
-                  color: "#555",
-                  marginBottom: "8px",
-                }}
-              >
-                Fənn: {subject || "________"}
-              </div>
-              <div
-                style={{
-                  fontWeight: 600,
-                  marginBottom: "8px",
-                }}
-              >
-                Bilet № {ticket.number}
+                dangerouslySetInnerHTML={{ __html: parsed.html }}
+                className="[&_*]:max-w-full"
+              />
+            </div>
+          </div>
+
+          {/* Bloklar + parametrlər + generate düyməsi */}
+          <div className="flex flex-col gap-3">
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h2 className="mb-2 text-sm font-semibold text-slate-800">
+                3. Tapılan bloklar
+              </h2>
+              {blocks.length === 0 ? (
+                <p className="text-xs text-slate-500">
+                  Blok tapılmadı. DOCX faylında{" "}
+                  <code className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px]">
+                    I BLOK
+                  </code>
+                  ,{" "}
+                  <code className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px]">
+                    II BLOK
+                  </code>{" "}
+                  və s. başlıqlar olduğuna əmin ol.
+                </p>
+              ) : (
+                <ul className="space-y-1 text-sm text-slate-700">
+                  {blocks.map((b, idx) => (
+                    <li key={idx} className="flex items-center justify-between">
+                      <span>{b.name}</span>
+                      <span className="text-xs text-slate-500">
+                        {b.questions.length} sual
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h2 className="mb-2 text-sm font-semibold text-slate-800">
+                4. Bilet parametrləri
+              </h2>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-slate-600">
+                    Universitet
+                  </label>
+                  <input
+                    value={university}
+                    onChange={(e) => setUniversity(e.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-slate-600">
+                    Fənn
+                  </label>
+                  <input
+                    value={subject}
+                    onChange={(e) => setSubject(e.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                    placeholder="Məs: İKT, İngilis dili..."
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-slate-600">
+                    Bilet sayı
+                  </label>
+                  <input
+                    type="number"
+                    value={ticketCount}
+                    min={1}
+                    onChange={(e) =>
+                      setTicketCount(Number(e.target.value))
+                    }
+                    className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 pt-5">
+                  <input
+                    id="strict"
+                    type="checkbox"
+                    checked={strictNoRepeat}
+                    onChange={(e) => setStrictNoRepeat(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <label
+                    htmlFor="strict"
+                    className="text-xs text-slate-700"
+                  >
+                    Sual təkrarı <span className="font-semibold">olmasın</span>
+                  </label>
+                </div>
               </div>
 
-              <ol style={{ paddingLeft: "20px", fontSize: "14px" }}>
-                {ticket.questions.map((q, idx) => (
-                  <li key={idx} style={{ marginBottom: "4px" }}>
-                    {q.text}
-                  </li>
-                ))}
-              </ol>
+              <button
+                onClick={generateTicketsFromDoc}
+                disabled={!blocks.length}
+                className="mt-4 inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+              >
+                Biletləri generasiya et
+              </button>
             </div>
-          ))}
-        </div>
-      </section>
+          </div>
+        </section>
+      )}
+
+      {/* Bilet preview + DOCX export */}
+      {tickets.length > 0 && (
+        <section className="mt-6 space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-sm font-semibold text-slate-800">
+              5. Generasiya olunmuş biletlər ({tickets.length} ədəd)
+            </h2>
+
+            <button
+              onClick={exportTicketsToDocx}
+              className="inline-flex items-center justify-center rounded-md border border-blue-600 px-4 py-1.5 text-sm font-semibold text-blue-600 hover:bg-blue-50"
+            >
+              DOCX olaraq yüklə
+            </button>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            {tickets.map((t) => (
+              <div
+                key={t.number}
+                className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm"
+              >
+                <div className="mb-1 text-xs text-slate-500">
+                  {university} — Fənn: {subject || "________"}
+                </div>
+                <div className="mb-2 font-semibold text-slate-800">
+                  Bilet № {t.number}
+                </div>
+                <ol className="space-y-2 pl-4">
+                  {t.questions.map((q, idx) => (
+                    <li key={idx} className="text-sm text-slate-800">
+                      {q.question.text && (
+                        <div className="mb-1">{q.question.text}</div>
+                      )}
+                      {q.question.images.length > 0 && (
+                        <div className="text-[11px] italic text-slate-500">
+                          (Bu sualda şəkil var – DOCX faylında görünəcək)
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {!parsed && !isLoading && (
+        <p className="mt-4 text-sm text-slate-500">
+          Başlamaq üçün yuxarıdan DOCX faylı seç.
+        </p>
+      )}
     </main>
   );
 }
