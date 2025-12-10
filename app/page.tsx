@@ -671,7 +671,7 @@ export default function FaylOxumaPage() {
                     value={headOfDept}
                     onChange={(e) => setHeadOfDept(e.target.value)}
                     className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                    placeholder="Məs: dos. Rafiq Məmmədov"
+                    placeholder="Məs: dos. Rahib İmamquluyev"
                   />
                 </div>
 
