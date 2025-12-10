@@ -264,7 +264,11 @@ export default function FaylOxumaPage() {
 
   // Form state
   const [university, setUniversity] = useState("Bakı Biznes Universiteti");
+  const [faculty, setFaculty] = useState("");
+  const [group, setGroup] = useState("");
   const [subject, setSubject] = useState("");
+  const [headOfDept, setHeadOfDept] = useState("");
+  const [author, setAuthor] = useState("");
   const [ticketCount, setTicketCount] = useState(20);
   const [strictNoRepeat, setStrictNoRepeat] = useState(false);
 
@@ -407,6 +411,21 @@ export default function FaylOxumaPage() {
               heading: HeadingLevel.HEADING_2,
             })
           );
+          if (faculty || group) {
+            arr.push(
+              new Paragraph(
+                `Fakültə: ${faculty || "________"}    Qrup: ${
+                  group || "________"
+                }`
+              )
+            );
+          } else {
+            arr.push(
+              new Paragraph(
+                `Fakültə: ________    Qrup: ________`
+              )
+            );
+          }
           arr.push(new Paragraph(`Fənn: ${subject || "________"}`));
           arr.push(new Paragraph(`Bilet № ${ticket.number}`));
           arr.push(new Paragraph(""));
@@ -423,7 +442,7 @@ export default function FaylOxumaPage() {
               })
             );
 
-            // Şəkillər (əgər varsa – artıq mətnlə birlikdə eyni sual üçündür)
+            // Şəkillər
             q.images.forEach((img) => {
               let type: "png" | "jpg" | "gif" | "bmp" = "png";
 
@@ -459,6 +478,18 @@ export default function FaylOxumaPage() {
             arr.push(new Paragraph(""));
           });
 
+          // Aşağıda imza hissəsi
+          arr.push(
+            new Paragraph(
+              `Kafedra müdiri: ${headOfDept || "________________"}`
+            )
+          );
+          arr.push(
+            new Paragraph(
+              `Tərtib edən: ${author || "________________"}`
+            )
+          );
+
           arr.push(new Paragraph(""));
           arr.push(new Paragraph(""));
 
@@ -484,7 +515,12 @@ export default function FaylOxumaPage() {
           <h1 className="text-2xl font-bold text-slate-900">
             DOCX → Şəkilli Bilet Generatoru
           </h1>
-          <Link href="/blok" className="text-blue-500 hover:text-blue-600">Nəzəri suallar üçün Blok-Blok əlavə etmək  </Link>
+          <Link
+            href="/blok"
+            className="text-blue-500 hover:text-blue-600 text-sm"
+          >
+            Nəzəri suallar üçün Blok-Blok əlavə etmək
+          </Link>
           <p className="text-sm text-slate-600">
             DOCX yüklə → Sistem blokları (I BLOK, II BLOK...) və sualları (mətn
             + şəkil) avtomatik ayırsın → Biletləri generasiya edib DOCX olaraq
@@ -499,10 +535,10 @@ export default function FaylOxumaPage() {
           1. DOCX faylını yüklə
         </h2>
         <p className="mb-3 text-xs text-slate-500">
-          Faylda blok başlıqları <strong>I BLOK, II BLOK, ...</strong> formasında
-          olmalıdır. Hər blokun altında praktiki suallar (mətn + şəkil) ola bilər.
-          Suallar nömrələnibsə (1., 2), 3. və s.), sistem bir nömrədən
-          növbəti nömrəyə qədər olan hissəni 1 sual kimi qəbul edəcək.
+          Faylda blok başlıqları <strong>I BLOK, II BLOK, ...</strong>{" "}
+          formasında olmalıdır. Hər blokun altında praktiki suallar (mətn +
+          şəkil) ola bilər. Suallar nömrələnibsə (1., 2), 3. və s.), sistem bir
+          nömrədən növbəti nömrəyə qədər olan hissəni 1 sual kimi qəbul edəcək.
         </p>
 
         <input
@@ -593,6 +629,30 @@ export default function FaylOxumaPage() {
 
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-slate-600">
+                    Fakültə
+                  </label>
+                  <input
+                    value={faculty}
+                    onChange={(e) => setFaculty(e.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                    placeholder="Məs: İqtisadiyyat fakültəsi"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-slate-600">
+                    Qrup
+                  </label>
+                  <input
+                    value={group}
+                    onChange={(e) => setGroup(e.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                    placeholder="Məs: 642a, İT-21 və s."
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-slate-600">
                     Fənn
                   </label>
                   <input
@@ -600,6 +660,30 @@ export default function FaylOxumaPage() {
                     onChange={(e) => setSubject(e.target.value)}
                     className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                     placeholder="Məs: İKT, İngilis dili..."
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-slate-600">
+                    Kafedra müdiri
+                  </label>
+                  <input
+                    value={headOfDept}
+                    onChange={(e) => setHeadOfDept(e.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                    placeholder="Məs: dos. Rafiq Məmmədov"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-slate-600">
+                    Tərtib edən
+                  </label>
+                  <input
+                    value={author}
+                    onChange={(e) => setAuthor(e.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                    placeholder="Məs: müəllim Fərid Nəcəfov"
                   />
                 </div>
 
@@ -630,7 +714,8 @@ export default function FaylOxumaPage() {
                     htmlFor="strict"
                     className="text-xs text-slate-700"
                   >
-                    Sual təkrarı <span className="font-semibold">olmasın</span>
+                    Sual təkrarı{" "}
+                    <span className="font-semibold">olmasın</span>
                   </label>
                 </div>
               </div>
@@ -670,7 +755,14 @@ export default function FaylOxumaPage() {
                 className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm"
               >
                 <div className="mb-1 text-xs text-slate-500">
-                  {university} — Fənn: {subject || "________"}
+                  {university}
+                </div>
+                <div className="mb-1 text-xs text-slate-500">
+                  Fakültə: {faculty || "________"} — Qrup:{" "}
+                  {group || "________"}
+                </div>
+                <div className="mb-1 text-xs text-slate-500">
+                  Fənn: {subject || "________"}
                 </div>
                 <div className="mb-2 font-semibold text-slate-800">
                   Bilet № {t.number}
@@ -689,6 +781,21 @@ export default function FaylOxumaPage() {
                     </li>
                   ))}
                 </ol>
+
+                <div className="mt-3 border-t border-slate-200 pt-2 text-[11px] text-slate-600">
+                  <div>
+                    Kafedra müdiri:{" "}
+                    <span className="font-medium">
+                      {headOfDept || "________________"}
+                    </span>
+                  </div>
+                  <div>
+                    Tərtib edən:{" "}
+                    <span className="font-medium">
+                      {author || "________________"}
+                    </span>
+                  </div>
+                </div>
               </div>
             ))}
           </div>
