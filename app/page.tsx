@@ -527,7 +527,7 @@ export default function FaylOxumaPage() {
       );
 
       arr.push(new Paragraph(`Fənn: ${subject || "________"}`));
-      arr.push(new Paragraph(`Bilet № ${ticket.number}`));
+      arr.push(new Paragraph(`Bilet № `));
       arr.push(new Paragraph(""));
 
       // Suallar
@@ -789,7 +789,7 @@ export default function FaylOxumaPage() {
                 </div>
                 <div className="mb-1 text-xs text-slate-500">Fənn: {subject || "________"}</div>
 
-                <div className="mb-2 font-semibold text-slate-800">Bilet № {t.number}</div>
+                <div className="mb-2 font-semibold text-slate-800">Bilet № </div>
 
                 <ol className="space-y-2 pl-4">
                   {t.questions.map((q, idx) => (
