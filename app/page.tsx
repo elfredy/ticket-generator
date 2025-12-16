@@ -643,7 +643,7 @@ export default function FaylOxumaPage() {
 
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-slate-600">Fənn müəllimi</label>
-                  <input value={teacher} onChange={(e) => setTeacher(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
+                  <input placeholder="Nəcəfov Fərid" value={teacher} onChange={(e) => setTeacher(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
                 </div>
 
                 <div className="space-y-1">
@@ -653,12 +653,12 @@ export default function FaylOxumaPage() {
 
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-slate-600">Kafedra adı</label>
-                  <input value={department} onChange={(e) => setDepartment(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
+                  <input value={department} placeholder="İT kafedra" onChange={(e) => setDepartment(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
                 </div>
 
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-slate-600">Kafedra müdiri</label>
-                  <input value={headOfDept} onChange={(e) => setHeadOfDept(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
+                  <input value={headOfDept} placeholder="Rahib İmamquluyev" onChange={(e) => setHeadOfDept(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
                 </div>
 
                 <div className="space-y-1">
