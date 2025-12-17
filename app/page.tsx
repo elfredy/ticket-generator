@@ -25,8 +25,8 @@ import Link from "next/link";
 type QuestionImage = {
   contentType: string;
   data: Uint8Array;
-  width?: number;  // px
-  height?: number; // px
+  width?: number; // px (HTML-dən gələ bilər)
+  height?: number;
 };
 
 type Question = {
@@ -45,7 +45,7 @@ type TicketQuestion = {
 };
 
 type Ticket = {
-  number: number;
+  number: number; // daxildə qalır (logic üçün), export-da yazmırıq
   questions: TicketQuestion[];
 };
 
@@ -66,7 +66,7 @@ function shuffle<T>(array: T[]): T[] {
   return arr;
 }
 
-function dataUrlToImage(dataUrl: string): { contentType: string; data: Uint8Array } | null {
+function dataUrlToBytes(dataUrl: string): { contentType: string; data: Uint8Array } | null {
   if (!dataUrl.startsWith("data:")) return null;
 
   const [meta, base64] = dataUrl.split(",");
@@ -78,34 +78,101 @@ function dataUrlToImage(dataUrl: string): { contentType: string; data: Uint8Arra
   const binary = atob(base64);
   const len = binary.length;
   const bytes = new Uint8Array(len);
-
   for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
 
   return { contentType, data: bytes };
 }
 
-// img tag-dan ölçü oxu (width/height attr və ya style)
-function readImgSize(img: HTMLImageElement): { width?: number; height?: number } {
-  const wAttr = img.getAttribute("width");
-  const hAttr = img.getAttribute("height");
-
-  const w1 = wAttr ? Number(wAttr) : undefined;
-  const h1 = hAttr ? Number(hAttr) : undefined;
-
-  // style="width:123px; height:45px"
-  const style = img.getAttribute("style") || "";
-  const wMatch = style.match(/width\s*:\s*(\d+)\s*px/i);
-  const hMatch = style.match(/height\s*:\s*(\d+)\s*px/i);
-  const w2 = wMatch ? Number(wMatch[1]) : undefined;
-  const h2 = hMatch ? Number(hMatch[1]) : undefined;
-
-  return {
-    width: Number.isFinite(w1) && w1 ? w1 : Number.isFinite(w2) ? w2 : undefined,
-    height: Number.isFinite(h1) && h1 ? h1 : Number.isFinite(h2) ? h2 : undefined,
-  };
+// ---------- Byte-dan şəkil ölçüsü oxuyan SAFE funksiya (Blob/Image YOX) ----------
+function readU32BE(b: Uint8Array, off: number) {
+  return (b[off] << 24) | (b[off + 1] << 16) | (b[off + 2] << 8) | b[off + 3];
+}
+function readU16BE(b: Uint8Array, off: number) {
+  return (b[off] << 8) | b[off + 1];
+}
+function readU32LE(b: Uint8Array, off: number) {
+  return (b[off]) | (b[off + 1] << 8) | (b[off + 2] << 16) | (b[off + 3] << 24);
+}
+function readU16LE(b: Uint8Array, off: number) {
+  return b[off] | (b[off + 1] << 8);
 }
 
-// yalnız böyükdürsə kiçildir (böyütmür)
+function getImageDimensionsFromBytes(
+  bytes: Uint8Array,
+  mime: string
+): { width: number; height: number } | null {
+  const m = (mime || "").toLowerCase();
+
+  // PNG: 8-byte signature, IHDR chunk-da width/height (big-endian)
+  if (m.includes("png")) {
+    // signature: 89 50 4E 47 0D 0A 1A 0A
+    if (bytes.length >= 24 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e) {
+      // IHDR data start: byte 16
+      const w = readU32BE(bytes, 16);
+      const h = readU32BE(bytes, 20);
+      if (w > 0 && h > 0) return { width: w, height: h };
+    }
+  }
+
+  // GIF: "GIF87a"/"GIF89a", width/height little-endian at 6
+  if (m.includes("gif")) {
+    if (bytes.length >= 10 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+      const w = readU16LE(bytes, 6);
+      const h = readU16LE(bytes, 8);
+      if (w > 0 && h > 0) return { width: w, height: h };
+    }
+  }
+
+  // BMP: "BM", width/height little-endian at 18/22 (BITMAPINFOHEADER)
+  if (m.includes("bmp")) {
+    if (bytes.length >= 26 && bytes[0] === 0x42 && bytes[1] === 0x4d) {
+      const w = readU32LE(bytes, 18);
+      const hRaw = readU32LE(bytes, 22);
+      const h = Math.abs(hRaw);
+      if (w > 0 && h > 0) return { width: w, height: h };
+    }
+  }
+
+  // JPEG: parse markers until SOF0/SOF2, height/width inside
+  if (m.includes("jpeg") || m.includes("jpg")) {
+    if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+      let i = 2;
+      while (i < bytes.length) {
+        if (bytes[i] !== 0xff) { i++; continue; }
+        // skip fill bytes
+        while (i < bytes.length && bytes[i] === 0xff) i++;
+        if (i >= bytes.length) break;
+
+        const marker = bytes[i++];
+        // markers without length
+        if (marker === 0xd9 || marker === 0xda) break; // EOI or SOS
+
+        if (i + 1 >= bytes.length) break;
+        const segLen = readU16BE(bytes, i);
+        if (segLen < 2) break;
+
+        // SOF0 (0xC0), SOF2 (0xC2) etc. contain size
+        if (
+          marker === 0xc0 || marker === 0xc1 || marker === 0xc2 || marker === 0xc3 ||
+          marker === 0xc5 || marker === 0xc6 || marker === 0xc7 ||
+          marker === 0xc9 || marker === 0xca || marker === 0xcb ||
+          marker === 0xcd || marker === 0xce || marker === 0xcf
+        ) {
+          // format: [precision(1)][height(2)][width(2)]...
+          const height = readU16BE(bytes, i + 3);
+          const width = readU16BE(bytes, i + 5);
+          if (width > 0 && height > 0) return { width, height };
+          break;
+        }
+
+        i += segLen;
+      }
+    }
+  }
+
+  return null;
+}
+
 function fitToMaxWidth(size: { width: number; height: number }, maxWidth: number) {
   if (size.width <= maxWidth) return size;
   const ratio = maxWidth / size.width;
@@ -142,13 +209,30 @@ function splitNumberedQuestions(text: string): string[] {
     }
   }
 
-  if (current.length) {
-    questions.push(current.join(" ").replace(/\s+/g, " ").trim());
-  }
+  if (current.length) questions.push(current.join(" ").replace(/\s+/g, " ").trim());
 
   if (!hasNumberPattern) return lines.map((l) => l.trim()).filter(Boolean);
 
   return questions.filter(Boolean);
+}
+
+function readImgSize(img: HTMLImageElement): { width?: number; height?: number } {
+  const wAttr = img.getAttribute("width");
+  const hAttr = img.getAttribute("height");
+
+  const w1 = wAttr ? Number(wAttr) : undefined;
+  const h1 = hAttr ? Number(hAttr) : undefined;
+
+  const style = img.getAttribute("style") || "";
+  const wMatch = style.match(/width\s*:\s*(\d+)\s*px/i);
+  const hMatch = style.match(/height\s*:\s*(\d+)\s*px/i);
+  const w2 = wMatch ? Number(wMatch[1]) : undefined;
+  const h2 = hMatch ? Number(hMatch[1]) : undefined;
+
+  return {
+    width: Number.isFinite(w1) && w1 ? w1 : Number.isFinite(w2) ? w2 : undefined,
+    height: Number.isFinite(h1) && h1 ? h1 : Number.isFinite(h2) ? h2 : undefined,
+  };
 }
 
 function parseBlocksFromHtml(html: string): Block[] {
@@ -173,7 +257,7 @@ function parseBlocksFromHtml(html: string): Block[] {
 
     if (!currentBlock) continue;
 
-    // OL / UL
+    // OL/UL
     if (el.tagName === "OL" || el.tagName === "UL") {
       const liElements = Array.from(el.children).filter(
         (child) => (child as HTMLElement).tagName === "LI"
@@ -187,11 +271,11 @@ function parseBlocksFromHtml(html: string): Block[] {
         imgEls.forEach((img) => {
           const src = img.getAttribute("src");
           if (!src) return;
-          const qImg = dataUrlToImage(src);
-          if (!qImg) return;
+          const bytes = dataUrlToBytes(src);
+          if (!bytes) return;
 
           const { width, height } = readImgSize(img);
-          images.push({ ...qImg, width, height });
+          images.push({ ...bytes, width, height });
         });
 
         if (!liText && images.length === 0) return;
@@ -207,7 +291,7 @@ function parseBlocksFromHtml(html: string): Block[] {
       continue;
     }
 
-    // digər elementlər
+    // Digər elementlər
     const imgEls = Array.from(el.querySelectorAll("img")) as HTMLImageElement[];
     const hasText = !!text;
 
@@ -215,16 +299,15 @@ function parseBlocksFromHtml(html: string): Block[] {
     imgEls.forEach((img) => {
       const src = img.getAttribute("src");
       if (!src) return;
-      const qImg = dataUrlToImage(src);
-      if (!qImg) return;
+      const bytes = dataUrlToBytes(src);
+      if (!bytes) return;
 
       const { width, height } = readImgSize(img);
-      images.push({ ...qImg, width, height });
+      images.push({ ...bytes, width, height });
     });
 
     const hasImages = images.length > 0;
 
-    // yalnız şəkil → son sualın üzərinə əlavə et
     if (!hasText && hasImages) {
       if (currentBlock.questions.length > 0) {
         const lastQ = currentBlock.questions[currentBlock.questions.length - 1];
@@ -235,13 +318,11 @@ function parseBlocksFromHtml(html: string): Block[] {
       continue;
     }
 
-    // həm mətn, həm şəkil
     if (hasText && hasImages) {
       currentBlock.questions.push({ text, images });
       continue;
     }
 
-    // yalnız mətn
     if (hasText && !hasImages) {
       const parts = splitNumberedQuestions(text);
       parts.forEach((qText) => currentBlock!.questions.push({ text: qText, images: [] }));
@@ -383,7 +464,8 @@ export default function FaylOxumaPage() {
         tQ.push({ block: b.name, question: q });
       });
 
-      newTickets.push({ number: i + 1, questions: tQ });
+      // ✅ bilet həmişə 5 sual
+      newTickets.push({ number: i + 1, questions: tQ.slice(0, 5) });
     }
 
     setTickets(newTickets);
@@ -397,13 +479,13 @@ export default function FaylOxumaPage() {
     const all: (Paragraph | Table)[] = [];
 
     for (const ticket of tickets) {
+      // Header
       all.push(
         new Paragraph({
           alignment: AlignmentType.CENTER,
           children: [new TextRun({ text: university || "Universitet", bold: true, size: 28 })],
         })
       );
-
       all.push(new Paragraph({ text: "" }));
 
       all.push(
@@ -426,8 +508,14 @@ export default function FaylOxumaPage() {
             }),
             new TableRow({
               children: [
-                new TableCell({ borders: noBorders, children: [labelLine("Fənn Müəllimi", teacher)] }),
-                new TableCell({ borders: noBorders, children: [labelLine("Qrup", group)] }),
+                new TableCell({
+                  borders: noBorders,
+                  children: [labelLine("Fənn Müəllimi", teacher)],
+                }),
+                new TableCell({
+                  borders: noBorders,
+                  children: [labelLine("Qrup", group)],
+                }),
               ],
             }),
           ],
@@ -436,12 +524,13 @@ export default function FaylOxumaPage() {
 
       all.push(new Paragraph({ text: "" }));
 
+      // ✅ Bilet № — nömrə YOX, yalnız alt xətt
       all.push(
         new Paragraph({
           alignment: AlignmentType.CENTER,
           children: [
-            new TextRun({ text: "BİLET №", bold: true, size: 26 }),
-            new TextRun({ text: ` ${ticket.number}`, bold: true, size: 26 }),
+            new TextRun({ text: "BİLET № ", bold: true, size: 26 }),
+            new TextRun({ text: "______", bold: true, size: 26 }),
           ],
         })
       );
@@ -449,8 +538,11 @@ export default function FaylOxumaPage() {
       all.push(new Paragraph({ text: "" }));
       all.push(new Paragraph({ text: "" }));
 
-      for (let idx = 0; idx < ticket.questions.length; idx++) {
-        const q = ticket.questions[idx].question;
+      // ✅ Suallar həmişə 5
+      const five = ticket.questions.slice(0, 5);
+
+      for (let idx = 0; idx < five.length; idx++) {
+        const q = five[idx].question;
 
         all.push(
           new Paragraph({
@@ -464,11 +556,12 @@ export default function FaylOxumaPage() {
         for (const img of q.images) {
           const type = imgTypeFromMime(img.contentType);
 
-          // ✅ orijinal ölçü (HTML-dən gəlir). yoxdursa fallback.
-          let size = {
-            width: img.width && img.width > 0 ? img.width : 420,
-            height: img.height && img.height > 0 ? img.height : 260,
-          };
+          // 1) Əgər HTML-dən width/height gəlibsə onu götür (çox vaxt gəlmir)
+          // 2) Gəlmirsə byte-dan oxu (DARTILMA problemi burda həll olur)
+          let size =
+            img.width && img.height
+              ? { width: img.width, height: img.height }
+              : getImageDimensionsFromBytes(img.data, img.contentType) || { width: 420, height: 260 };
 
           // ✅ yalnız böyükdürsə kiçilt
           size = fitToMaxWidth(size, MAX_W);
@@ -479,10 +572,7 @@ export default function FaylOxumaPage() {
                 new ImageRun({
                   data: img.data,
                   type,
-                  transformation: {
-                    width: size.width,
-                    height: size.height,
-                  },
+                  transformation: { width: size.width, height: size.height },
                 }),
               ],
             })
@@ -539,7 +629,10 @@ export default function FaylOxumaPage() {
                     new Paragraph({
                       children: [
                         new TextRun({ text: "Tərtib etdi: " }),
-                        new TextRun({ text: author?.trim() ? author.trim() : "________________", bold: true }),
+                        new TextRun({
+                          text: author?.trim() ? author.trim() : "________________",
+                          bold: true,
+                        }),
                       ],
                     }),
                   ],
@@ -643,7 +736,7 @@ export default function FaylOxumaPage() {
 
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-slate-600">Fənn müəllimi</label>
-                  <input placeholder="Nəcəfov Fərid" value={teacher} onChange={(e) => setTeacher(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
+                  <input value={teacher} onChange={(e) => setTeacher(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
                 </div>
 
                 <div className="space-y-1">
@@ -653,12 +746,12 @@ export default function FaylOxumaPage() {
 
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-slate-600">Kafedra adı</label>
-                  <input value={department} placeholder="İT kafedra" onChange={(e) => setDepartment(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
+                  <input value={department} onChange={(e) => setDepartment(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
                 </div>
 
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-slate-600">Kafedra müdiri</label>
-                  <input value={headOfDept} placeholder="Rahib İmamquluyev" onChange={(e) => setHeadOfDept(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
+                  <input value={headOfDept} onChange={(e) => setHeadOfDept(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
                 </div>
 
                 <div className="space-y-1">
