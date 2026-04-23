@@ -510,7 +510,7 @@ export default function FaylOxumaPage() {
               children: [
                 new TableCell({
                   borders: noBorders,
-                  children: [labelLine("Fənn Müəllimi", teacher)],
+                  children: [labelLine("Kafedra", teacher)],
                 }),
                 new TableCell({
                   borders: noBorders,
