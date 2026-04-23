@@ -584,7 +584,7 @@ export default function FaylOxumaPage() {
 
       all.push(new Paragraph({ text: "" }));
 
-      all.push(
+      /* all.push(
         new Paragraph({
           children: [
             new TextRun({ text: "İmtahan bileti " }),
@@ -596,7 +596,7 @@ export default function FaylOxumaPage() {
             }),
           ],
         })
-      );
+      ); */
 
       all.push(new Paragraph({ text: "" }));
       all.push(new Paragraph({ text: "" }));
