@@ -744,10 +744,7 @@ export default function FaylOxumaPage() {
                   <input value={examDate} onChange={(e) => setExamDate(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
                 </div>
 
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-slate-600">Kafedra adı</label>
-                  <input value={department} onChange={(e) => setDepartment(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
-                </div>
+            
 
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-slate-600">Kafedra müdiri</label>
